@@ -4,4 +4,5 @@ public enum FormaPagamento {
     BOLETO,
     PIX,
     CARTAO_CREDITO
+    CARTEIRA_DIGITAL
 }

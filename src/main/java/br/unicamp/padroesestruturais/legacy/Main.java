@@ -127,12 +127,14 @@ public class Main {
         System.out.println("  1. Boleto");
         System.out.println("  2. Pix");
         System.out.println("  3. Cartao de Credito");
+        System.out.println("  4. Carteira Digital");
         System.out.print("Escolha: ");
 
         return switch (lerInteiro(scanner)) {
             case 1 -> FormaPagamento.BOLETO;
             case 2 -> FormaPagamento.PIX;
             case 3 -> FormaPagamento.CARTAO_CREDITO;
+            case 4 -> FormaPagamento.CARTEIRA_DIGITAL;
             default -> {
                 System.out.println("Forma de pagamento invalida.");
                 yield null;

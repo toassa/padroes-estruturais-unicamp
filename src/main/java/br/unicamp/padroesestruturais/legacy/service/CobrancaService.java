@@ -1,11 +1,15 @@
 package br.unicamp.padroesestruturais.legacy.service;
 
+import br.unicamp.padroesestruturais.legacy.adapter.GatewayCobranca;
+import br.unicamp.padroesestruturais.legacy.adapter.GatewayPagamentoInternoAdapter;
+import br.unicamp.padroesestruturais.legacy.adapter.PaySecureGatewayAdapter;
+import br.unicamp.padroesestruturais.legacy.adapter.WalletPayGatewayAdapter;
+import br.unicamp.padroesestruturais.legacy.decorator.*;
 import br.unicamp.padroesestruturais.legacy.domain.FormaPagamento;
 import br.unicamp.padroesestruturais.legacy.domain.Pedido;
 import br.unicamp.padroesestruturais.legacy.domain.ResultadoCobranca;
-import br.unicamp.padroesestruturais.legacy.externo.GatewayIndisponivelException;
 import br.unicamp.padroesestruturais.legacy.externo.PaySecureGateway;
-import br.unicamp.padroesestruturais.legacy.externo.TransacaoExterna;
+import br.unicamp.padroesestruturais.legacy.externo.WalletPaySDK;
 import br.unicamp.padroesestruturais.legacy.gateway.GatewayPagamentoInterno;
 
 import java.util.ArrayList;
@@ -15,10 +19,19 @@ import java.util.Map;
 
 public class CobrancaService {
 
-    private static final double TAXA_DESCONTO_FIDELIDADE = 0.05;
-    private static final double TAXA_JUROS_PARCELAMENTO = 0.0299;
-    private static final double TAXA_OPERACAO_INTERNACIONAL = 0.05;
-    private static final double VALOR_SEGURO = 4.90;
+    private final Map<FormaPagamento, GatewayCobranca> gateways = new HashMap<>();
+
+    public CobrancaService() {
+        GatewayCobranca gatewayInterno =
+                new GatewayPagamentoInternoAdapter(new GatewayPagamentoInterno());
+
+        gateways.put(FormaPagamento.BOLETO, gatewayInterno);
+        gateways.put(FormaPagamento.PIX, gatewayInterno);
+        gateways.put(FormaPagamento.CARTAO_CREDITO,
+                new PaySecureGatewayAdapter(new PaySecureGateway()));
+        gateways.put(FormaPagamento.CARTEIRA_DIGITAL,
+                new WalletPayGatewayAdapter(new WalletPaySDK()));
+    }
 
     public ResultadoCobranca cobrar(Pedido pedido, FormaPagamento forma,
                                      boolean aplicarDescontoFidelidade,
@@ -26,34 +39,26 @@ public class CobrancaService {
                                      boolean aplicarTaxaInternacional,
                                      boolean aplicarSeguro) {
 
-        double valorFinal = calcularValorFinal(pedido.getValorBase(), aplicarDescontoFidelidade,
-                aplicarJurosParcelamento, aplicarTaxaInternacional, aplicarSeguro);
+        ValorCobranca valorCobranca = criarValorComDecorators(
+                pedido.getValorBase(),
+                aplicarDescontoFidelidade,
+                aplicarJurosParcelamento,
+                aplicarTaxaInternacional,
+                aplicarSeguro
+        );
 
-        if (forma == FormaPagamento.BOLETO || forma == FormaPagamento.PIX) {
-            GatewayPagamentoInterno gateway = new GatewayPagamentoInterno();
-            return gateway.cobrar(pedido.getId(), pedido.getCliente(), valorFinal, forma);
+        return cobrar(pedido, forma, valorCobranca);
+    }
 
-        } else if (forma == FormaPagamento.CARTAO_CREDITO) {
-            PaySecureGateway gateway = new PaySecureGateway();
-
-            Map<String, Object> dadosTransacao = new HashMap<>();
-            dadosTransacao.put("orderId", pedido.getId());
-            dadosTransacao.put("customerName", pedido.getCliente());
-            dadosTransacao.put("amount", valorFinal);
-            dadosTransacao.put("currency", "BRL");
-
-            try {
-                TransacaoExterna transacao = gateway.processarTransacao(dadosTransacao);
-                String status = transacao.getCodigoStatus() == 200 ? "APROVADA" : "RECUSADA";
-                return new ResultadoCobranca(pedido.getId(), valorFinal, status, transacao.getReferenciaExterna(), forma);
-
-            } catch (GatewayIndisponivelException e) {
-                return new ResultadoCobranca(pedido.getId(), valorFinal, "RECUSADA", null, forma);
-            }
-
-        } else {
+    public ResultadoCobranca cobrar(Pedido pedido, FormaPagamento forma, ValorCobranca valorCobranca) {
+        if (forma == null || !gateways.containsKey(forma)) {
             throw new IllegalArgumentException("Forma de pagamento nao suportada: " + forma);
         }
+
+        double valorFinal = valorCobranca.calcular();
+        GatewayCobranca gateway = gateways.get(forma);
+
+        return gateway.cobrar(pedido, valorFinal, forma);
     }
 
     public List<ResultadoCobranca> cobrarEmLote(List<Pedido> pedidos, FormaPagamento forma,
@@ -65,34 +70,14 @@ public class CobrancaService {
         List<ResultadoCobranca> resultados = new ArrayList<>();
 
         for (Pedido pedido : pedidos) {
-            double valorFinal = calcularValorFinal(pedido.getValorBase(), aplicarDescontoFidelidade,
-                    aplicarJurosParcelamento, aplicarTaxaInternacional, aplicarSeguro);
-
-            if (forma == FormaPagamento.BOLETO || forma == FormaPagamento.PIX) {
-                GatewayPagamentoInterno gateway = new GatewayPagamentoInterno();
-                resultados.add(gateway.cobrar(pedido.getId(), pedido.getCliente(), valorFinal, forma));
-
-            } else if (forma == FormaPagamento.CARTAO_CREDITO) {
-                PaySecureGateway gateway = new PaySecureGateway();
-
-                Map<String, Object> dadosTransacao = new HashMap<>();
-                dadosTransacao.put("orderId", pedido.getId());
-                dadosTransacao.put("customerName", pedido.getCliente());
-                dadosTransacao.put("amount", valorFinal);
-                dadosTransacao.put("currency", "BRL");
-
-                try {
-                    TransacaoExterna transacao = gateway.processarTransacao(dadosTransacao);
-                    String status = transacao.getCodigoStatus() == 200 ? "APROVADA" : "RECUSADA";
-                    resultados.add(new ResultadoCobranca(pedido.getId(), valorFinal, status, transacao.getReferenciaExterna(), forma));
-
-                } catch (GatewayIndisponivelException e) {
-                    resultados.add(new ResultadoCobranca(pedido.getId(), valorFinal, "RECUSADA", null, forma));
-                }
-
-            } else {
-                throw new IllegalArgumentException("Forma de pagamento nao suportada: " + forma);
-            }
+            resultados.add(cobrar(
+                    pedido,
+                    forma,
+                    aplicarDescontoFidelidade,
+                    aplicarJurosParcelamento,
+                    aplicarTaxaInternacional,
+                    aplicarSeguro
+            ));
         }
 
         return resultados;
@@ -104,22 +89,39 @@ public class CobrancaService {
                                       boolean aplicarTaxaInternacional,
                                       boolean aplicarSeguro) {
 
-        double valor = valorBase;
+        ValorCobranca valorCobranca = criarValorComDecorators(
+                valorBase,
+                aplicarDescontoFidelidade,
+                aplicarJurosParcelamento,
+                aplicarTaxaInternacional,
+                aplicarSeguro
+        );
+
+        return valorCobranca.calcular();
+    }
+
+    private ValorCobranca criarValorComDecorators(double valorBase,
+                                                  boolean aplicarDescontoFidelidade,
+                                                  boolean aplicarJurosParcelamento,
+                                                  boolean aplicarTaxaInternacional,
+                                                  boolean aplicarSeguro) {
+
+        ValorCobranca valor = new ValorBase(valorBase);
 
         if (aplicarDescontoFidelidade) {
-            valor = valor - (valor * TAXA_DESCONTO_FIDELIDADE);
+            valor = new DescontoFidelidadeDecorator(valor);
         }
 
         if (aplicarJurosParcelamento) {
-            valor = valor + (valor * TAXA_JUROS_PARCELAMENTO);
+            valor = new JurosParcelamentoDecorator(valor);
         }
 
         if (aplicarTaxaInternacional) {
-            valor = valor + (valor * TAXA_OPERACAO_INTERNACIONAL);
+            valor = new TaxaInternacionalDecorator(valor);
         }
 
         if (aplicarSeguro) {
-            valor = valor + VALOR_SEGURO;
+            valor = new SeguroTransacaoDecorator(valor);
         }
 
         return valor;

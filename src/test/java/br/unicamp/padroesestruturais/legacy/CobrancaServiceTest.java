@@ -50,6 +50,27 @@ class CobrancaServiceTest {
     }
 
     @Test
+    void deveCobrarViaCarteiraDigitalSemAjustes() {
+        ResultadoCobranca resultado = service.cobrar(pedido, FormaPagamento.CARTEIRA_DIGITAL, false, false, false, false);
+
+        assertEquals("APROVADA", resultado.getStatus());
+        assertEquals(FormaPagamento.CARTEIRA_DIGITAL, resultado.getFormaPagamento());
+        assertEquals(1000.0, resultado.getValorCobrado(), 0.001);
+        assertNotNull(resultado.getReferencia());
+        assertTrue(resultado.getReferencia().startsWith("WPAY-"));
+    }
+
+    @Test
+    void deveRecusarCarteiraDigitalParaValorAcimaDoLimite() {
+        Pedido pedidoCaro = new Pedido("PED-004", "Construtora ABC Ltda", "Servidor", 15000.0);
+
+        ResultadoCobranca resultado = service.cobrar(pedidoCaro, FormaPagamento.CARTEIRA_DIGITAL, false, false, false, false);
+
+        assertEquals("RECUSADA", resultado.getStatus());
+        assertEquals(FormaPagamento.CARTEIRA_DIGITAL, resultado.getFormaPagamento());
+    }
+
+    @Test
     void deveRecusarCartaoCreditoParaValorAcimaDoLimite() {
         Pedido pedidoCaro = new Pedido("PED-003", "Construtora ABC Ltda", "Servidor", 15000.0);
 
